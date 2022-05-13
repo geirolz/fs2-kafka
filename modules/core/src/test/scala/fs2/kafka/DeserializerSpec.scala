@@ -3,6 +3,7 @@ package fs2.kafka
 import cats.Eq
 import cats.effect.IO
 import cats.laws.discipline._
+import fs2.kafka.Deserializer.RawRecord
 
 final class DeserializerSpec extends BaseCatsSpec {
   import cats.effect.unsafe.implicits.global
@@ -25,6 +26,26 @@ final class DeserializerSpec extends BaseCatsSpec {
 
       val deserializedTwice = Deserializer[IO, Int].deserialize(topic, headers, bytes ++ bytes)
       assert(deserializedTwice.attempt.unsafeRunSync().isLeft)
+    }
+  }
+
+  test("Deserializer#attemptRaw") {
+    forAll { (topic: String, headers: Headers, i: Int) =>
+      // Right
+      val bytes = Serializer[IO, Int].serialize(topic, headers, i).unsafeRunSync()
+      val deserialized = Deserializer[IO, Int].attemptRaw
+        .deserialize(topic, headers, bytes)
+      assert(deserialized.unsafeRunSync().isRight)
+
+      // Left
+      val bytesTwice = bytes ++ bytes
+      val deserializedTwice = Deserializer[IO, Int].attemptRaw
+        .deserialize(topic, headers, bytesTwice)
+      val twiceResult: Either[(Throwable, RawRecord), Int] =
+        deserializedTwice.unsafeRunSync()
+
+      assert(twiceResult.isLeft)
+      twiceResult.left.map(_._2) shouldBe Left(RawRecord(topic, headers, bytesTwice))
     }
   }
 
@@ -162,6 +183,34 @@ final class DeserializerSpec extends BaseCatsSpec {
           .unsafeRunSync()
           .isLeft
       }
+    }
+  }
+
+  test("Deserializer#attempt") {
+    val deserializer =
+      Deserializer[IO, Either[Throwable, String]]
+
+    assert(deserializer.deserialize("topic", Headers.empty, null).unsafeRunSync().isLeft)
+
+    forAll { (s: String) =>
+      val serialized = Serializer[IO, String].serialize("topic", Headers.empty, s).unsafeRunSync()
+      deserializer.deserialize("topic", Headers.empty, serialized).unsafeRunSync() shouldBe Right(s)
+    }
+  }
+
+  test("Deserializer#attemptRaw") {
+    val deserializer =
+      Deserializer[IO, Either[(Throwable, Deserializer.RawRecord), String]]
+
+    deserializer
+      .deserialize("topic", Headers.empty, null)
+      .unsafeRunSync()
+      .left
+      .map(_._2) shouldBe Deserializer.RawRecord("topic", Headers.empty, null)
+
+    forAll { (s: String) =>
+      val serialized = Serializer[IO, String].serialize("topic", Headers.empty, s).unsafeRunSync()
+      deserializer.deserialize("topic", Headers.empty, serialized).unsafeRunSync() shouldBe Right(s)
     }
   }
 

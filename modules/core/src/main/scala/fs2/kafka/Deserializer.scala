@@ -9,6 +9,8 @@ package fs2.kafka
 import cats.MonadError
 import cats.effect.Sync
 import cats.syntax.all._
+import fs2.kafka.Deserializer.RawRecord
+
 import java.nio.charset.{Charset, StandardCharsets}
 import java.util.UUID
 
@@ -52,6 +54,14 @@ sealed abstract class Deserializer[F[_], A] {
   def attempt: Deserializer[F, Either[Throwable, A]]
 
   /**
+    * Creates a new [[Deserializer]] which handles errors by
+    * turning them into `Either` values with the [[RawRecord]]
+    *
+    * If you don't need the [[RawRecord]] please use `attempt` instead.
+    */
+  def attemptRaw: Deserializer[F, Either[(Throwable, Deserializer.RawRecord), A]]
+
+  /**
     * Creates a new [[Deserializer]] which returns `None` when the
     * bytes are `null`, and otherwise returns the result of this
     * [[Deserializer]] wrapped in `Some`.
@@ -66,6 +76,13 @@ sealed abstract class Deserializer[F[_], A] {
 }
 
 object Deserializer {
+
+  case class RawRecord(
+    topic: String,
+    headers: Headers,
+    bytes: Array[Byte]
+  )
+
   def apply[F[_], A](implicit deserializer: Deserializer[F, A]): Deserializer[F, A] = deserializer
 
   /** Alias for [[Deserializer#identity]]. */
@@ -156,6 +173,14 @@ object Deserializer {
           deserialize(topic, headers, bytes).attempt
         }
 
+      override def attemptRaw: Deserializer[F, Either[(Throwable, RawRecord), A]] =
+        Deserializer.instance { (topic, headers, bytes) =>
+          deserialize(topic, headers, bytes).attempt.map {
+            case Left(ex)     => (ex, RawRecord(topic, headers, bytes)).asLeft
+            case Right(value) => value.asRight
+          }
+        }
+
       override def option: Deserializer[F, Option[A]] =
         Deserializer.instance { (topic, headers, bytes) =>
           if (bytes != null)
@@ -221,6 +246,27 @@ object Deserializer {
     */
   implicit def identity[F[_]](implicit F: Sync[F]): Deserializer[F, Array[Byte]] =
     Deserializer.lift(bytes => F.pure(bytes))
+
+  /**
+    * The attempt [[Deserializer]] try to deserialize to type `A`,
+    * When it fails returns `Left` containing the exception, otherwise returns `Right` with the value `A`
+    */
+  implicit def attempt[F[_], A](
+    implicit deserializer: Deserializer[F, A]
+  ): Deserializer[F, Either[Throwable, A]] =
+    deserializer.attempt
+
+  /**
+    * The attempt [[Deserializer]] try to deserialize to type `A`,
+    * When it fails returns `Left` containing the exception and the raw record,
+    * otherwise returns `Right` with the value `A`
+    *
+    * If you don't need the [[RawRecord]] please use `attempt` instead.
+    */
+  implicit def attemptRaw[F[_], A](
+    implicit deserializer: Deserializer[F, A]
+  ): Deserializer[F, Either[(Throwable, Deserializer.RawRecord), A]] =
+    deserializer.attemptRaw
 
   /**
     * The option [[Deserializer]] returns `None` when the bytes are
