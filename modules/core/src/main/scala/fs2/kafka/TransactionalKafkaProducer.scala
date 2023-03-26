@@ -1,5 +1,5 @@
 /*
- * Copyright 2018-2022 OVO Energy Limited
+ * Copyright 2018-2023 OVO Energy Limited
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -136,28 +136,24 @@ object TransactionalKafkaProducer {
           records: Chunk[ProducerRecord[K, V]],
           sendOffsets: Option[(KafkaByteProducer, Blocking[F]) => F[Unit]]
         ): F[Chunk[(ProducerRecord[K, V], RecordMetadata)]] =
-          if (records.isEmpty) F.pure(Chunk.empty)
-          else {
+          withProducer.exclusiveAccess { (producer, blocking) =>
+            blocking(producer.beginTransaction())
+              .bracketCase { _ =>
+                val produce = records
+                  .traverse(
+                    KafkaProducer
+                      .produceRecord(keySerializer, valueSerializer, producer, blocking)
+                  )
+                  .map(_.sequence)
 
-            withProducer.exclusiveAccess { (producer, blocking) =>
-              blocking(producer.beginTransaction())
-                .bracketCase { _ =>
-                  val produce = records
-                    .traverse(
-                      KafkaProducer
-                        .produceRecord(keySerializer, valueSerializer, producer, blocking)
-                    )
-                    .map(_.sequence)
-
-                  sendOffsets.fold(produce)(f => produce.flatTap(_ => f(producer, blocking)))
-                } {
-                  case (_, Outcome.Succeeded(_)) =>
-                    blocking(producer.commitTransaction())
-                  case (_, Outcome.Canceled() | Outcome.Errored(_)) =>
-                    blocking(producer.abortTransaction())
-                }
-            }.flatten
-          }
+                sendOffsets.fold(produce)(f => produce.flatTap(_ => f(producer, blocking)))
+              } {
+                case (_, Outcome.Succeeded(_)) =>
+                  blocking(producer.commitTransaction())
+                case (_, Outcome.Canceled() | Outcome.Errored(_)) =>
+                  blocking(producer.abortTransaction())
+              }
+          }.flatten
 
         override def metrics: F[Map[MetricName, Metric]] =
           withProducer.blocking { _.metrics().asScala.toMap }
