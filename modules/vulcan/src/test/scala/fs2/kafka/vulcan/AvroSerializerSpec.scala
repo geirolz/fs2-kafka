@@ -1,3 +1,9 @@
+/*
+ * Copyright 2018-2023 OVO Energy Limited
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 package fs2.kafka.vulcan
 
 import cats.effect.IO
@@ -5,7 +11,7 @@ import cats.effect.unsafe.implicits.global
 import fs2.kafka.Headers
 import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient
 import org.scalatest.funspec.AnyFunSpec
-import vulcan.{AvroError, Codec}
+import vulcan.Codec
 
 final class AvroSerializerSpec extends AnyFunSpec {
   describe("AvroSerializer") {
@@ -37,12 +43,8 @@ final class AvroSerializerSpec extends AnyFunSpec {
     }
 
     it("raises schema errors") {
-      val codec: Codec[Int] =
-        Codec.instance(
-          Left(AvroError("error")),
-          _ => Left(AvroError("encode")),
-          (_, _) => Left(AvroError("decode"))
-        )
+      val codec: Codec[BigDecimal] =
+        Codec.decimal(-1, -1)
 
       val serializer =
         avroSerializer(codec).using(avroSettings)
